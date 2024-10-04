@@ -19,10 +19,10 @@ app.use(bodyParser.json());
 
 // create connection to MySQL database
 const db = mysql.createConnection({
-    host: '192.168.254.11',
-    user: 'username',
-    password: 'password',
-    database: 'BarterDB',
+    host: "192.168.254.11",
+    user: "username",
+    password: "password",
+    database: "BarterDB",
 });
 
 // connect to db
@@ -95,7 +95,40 @@ app.post("/signin", (req, res) => {
     });
 });
 
+// route to get all items on site
+app.get("/item", (req, res) => {
+    const query = `SELECT * FROM item`;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error("Error fetching items:", err);
+            return res.status(500).json({ error: "Failed to fetch items" });
+        }
+        res.status(200).json(results);
+    });
+});
+
+// route to get a specific item on site
+app.get("/item/:item_id", (req, res) => {
+    const itemId = req.params.item_id; // extract item id from the url
+    const query = `SELECT * FROM item WHERE item_id = ?`;
+
+    db.query(query, [itemId], (err, results) => {
+        if (err) {
+            console.error("Error fetching items:", err);
+            return res.status(500).json({ error: "Failed to fetch item" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "Item not found" });
+        }
+
+        // return the first item in the array
+        res.status(200).json(results[0]);
+    });
+});
+
 // start the server
-app.listen(port, '0.0.0.0', () => {
+app.listen(port, "0.0.0.0", () => {
     console.log(`Server started on port ${port}`);
 });
