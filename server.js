@@ -230,7 +230,8 @@ app.get("/posts/fullPost", (req, res) => {
                     p.requesting_amount, 
                     r.name AS requesting_item_name, 
                     p.offering_amount, 
-                    o.name AS offering_item_name
+                    o.name AS offering_item_name,
+                    p.isNegotiable
                     FROM Post p
                     JOIN Item r ON p.requesting_item_id = r.item_id
                     JOIN Item o ON p.offering_item_id = o.item_id`;
