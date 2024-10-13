@@ -222,7 +222,55 @@ app.get("/posts/:post_id", (req, res) => {
     });
 });
 
-// TODO Add a post, delete a post,
+// route to add a post
+app.post("/post", (req, res) => {
+    const {
+        postingPartnershipId,
+        requestingItemId,
+        requestingAmount,
+        offeringItemId,
+        offeringAmount,
+        isNegotiable,
+    } = req.body;
+    const query = `
+        INSERT INTO Post (posting_partnership_id, requesting_item_id, requesting_amount, offering_item_id, offering_amount, isNegotiable) 
+        VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    db.query(
+        query,
+        [
+            postingPartnershipId,
+            requestingItemId,
+            requestingAmount,
+            offeringItemId,
+            offeringAmount,
+            isNegotiable,
+        ],
+        (err, result) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).send("Error adding the post");
+            }
+            res.status(201).send("Post added successfully");
+        }
+    );
+});
+
+// route to delete a post based on the id
+app.delete("/post/:id", (req, res) => {
+    const postId = req.params.id;
+    const query = `DELETE FROM Post WHERE post_id = ?`;
+
+    db.query(query, [postId], (err, result) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).send("Error deleting post");
+        }
+
+        res.send("Post deleted successfully");
+    });
+});
 
 // start the server
 app.listen(port, "0.0.0.0", () => {
