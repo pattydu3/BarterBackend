@@ -223,10 +223,8 @@ app.get("/posts/:post_id", (req, res) => {
 });
 
 // route to get the post and items names from the database.
-// call with "/posts/fullPost?limit=5" to get 5 posts from the DB, otherwise it returns all posts
-app.get("/posts/fullPost", (req, res) => {
-    const { limit } = req.query.limit ? parseInt(req.query.limit, 10) : null;
-    const query = `SELECT p.post_id, 
+app.get("/fullPost", (req, res) => {
+    let query = `SELECT p.post_id, 
                     p.requesting_amount, 
                     r.name AS requesting_item_name, 
                     p.offering_amount, 
@@ -236,11 +234,31 @@ app.get("/posts/fullPost", (req, res) => {
                     JOIN Item r ON p.requesting_item_id = r.item_id
                     JOIN Item o ON p.offering_item_id = o.item_id`;
 
-    if (limit) {
-        query += `LIMIT ?`;
-    }
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error("Error fetching posts", err);
+            return res.status(500).json({ error: "Failed to fetch posts" });
+        }
+        res.json(results);
+    });
+});
 
-    db.query(query, limit ? [limit] : [], (err, results) => {
+// route to get LIMIT number of random full posts from the database
+app.get("/fullPost/:limit", (req, res) => {
+    let { limit } = req.params;
+    let query = `SELECT p.post_id, 
+                    p.requesting_amount, 
+                    r.name AS requesting_item_name, 
+                    p.offering_amount, 
+                    o.name AS offering_item_name,
+                    p.isNegotiable
+                    FROM Post p
+                    JOIN Item r ON p.requesting_item_id = r.item_id
+                    JOIN Item o ON p.offering_item_id = o.item_id
+                    ORDER BY RAND()
+                    LIMIT ?`;
+
+    db.query(query, [parseInt(limit)], (err, results) => {
         if (err) {
             console.error("Error fetching posts", err);
             return res.status(500).json({ error: "Failed to fetch posts" });
