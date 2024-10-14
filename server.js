@@ -161,6 +161,23 @@ app.post("/item", (req, res) => {
     });
 });
 
+// route to get a random number of items from the database
+app.get("/items/random", (req, res) => {
+    const limit = 5;
+    const query = `SELECT * FROM Item ORDER BY RAND() LIMIT ?`;
+
+    db.query(query, [limit], (err, result) => {
+        if (err) {
+            console.error(`Error fetching ${limit} items`);
+            return response
+                .status(500)
+                .json({ error: `failed to fetch ${limit} items` });
+        }
+
+        res.json(result);
+    });
+});
+
 // route to update an existing item
 app.put("/item/:item_id", (req, res) => {
     const { item_id } = req.params;
