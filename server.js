@@ -142,22 +142,84 @@ app.get("/item/:item_id", (req, res) => {
     });
 });
 
-// route to add an item to db
+// route to add an item to db and update the ownership table
 app.post("/item", (req, res) => {
-    const { name, value, transfer_cost } = req.body;
-    const query = `INSERT INTO item (name, value, transfer_cost) VALUES (?, ?, ?)`;
+    const {
+        name,
+        transfer_cost,
+        value,
+        category_id,
+        condition,
+        user_id,
+        friend_user_id,
+    } = req.body;
 
-    db.query(query, [name, value, transfer_cost], (req, res) => {
+    if (!user_id) {
+        return res.status(400).json({ error: "User ID is required" });
+    } else if (!friend_user_id) {
+        return res.status(400).json({ error: "Friend User ID is required" });
+    }
+
+    db.beginTransaction((err) => {
         if (err) {
-            console.error("Error adding item:", err);
-            return res.status(500).json({ error: "Failed to add item" });
+            console.error("Error starting transaction:", err);
+            return res.status(500).json({ error: "Transaction start failed" });
         }
 
-        // confirm item was created
-        res.json({
-            message: "Item created",
-            item_id: result.insertId,
-        });
+        // Step 1: Insert the item into the item table
+        const addItemQuery = `INSERT INTO item (name, value, transfer_cost, category_id, \`condition\`) VALUES (?, ?, ?, ?, ?)`;
+
+        db.query(
+            addItemQuery,
+            [name, value, transfer_cost, category_id, condition],
+            (err, result) => {
+                if (err) {
+                    console.error("Error adding item:", err);
+                    return db.rollback(() => {
+                        res.status(500).json({ error: "Failed to add item" });
+                    });
+                }
+
+                const itemId = result.insertId;
+
+                // Step 2: Insert the record into the owns table
+                const addOwnsQuery = `INSERT INTO owns (user_id, item_id, intermediary_friend_id) VALUES (?, ?, ?)`;
+                db.query(
+                    addOwnsQuery,
+                    [user_id, itemId, friend_user_id],
+                    (err) => {
+                        if (err) {
+                            console.error("Error adding to owns:", err);
+                            return db.rollback(() => {
+                                res.status(500).json({
+                                    error: "Failed to update ownership table",
+                                });
+                            });
+                        }
+
+                        // Commit the transaction after both queries succeed
+                        db.commit((err) => {
+                            if (err) {
+                                console.error(
+                                    "Error committing transaction:",
+                                    err
+                                );
+                                return db.rollback(() => {
+                                    res.status(500).json({
+                                        error: "Transaction commit failed",
+                                    });
+                                });
+                            }
+
+                            res.json({
+                                message: "Item created",
+                                item_id: itemId,
+                            });
+                        });
+                    }
+                );
+            }
+        );
     });
 });
 
@@ -332,6 +394,96 @@ app.delete("/post/:id", (req, res) => {
 
         res.send("Post deleted successfully");
     });
+});
+
+// route to get all items owned by a user
+app.get("/owns/:userId", (req, res) => {
+    const userId = req.params.userId;
+    const query = `
+        SELECT item.*
+        FROM Owns
+        JOIN item ON Owns.item_id = item.item_id
+        WHERE Owns.user_id = ?;
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching items:", err);
+            return res.status(500).json({ error: "Failed to fetch items" });
+        }
+
+        res.json(results);
+    });
+});
+
+// Route to get a specific item owned by a user
+app.get("/owns/:userId/:itemId", (req, res) => {
+    const { userId, itemId } = req.params;
+    const query = `
+        SELECT item.*
+        FROM Owns
+        JOIN item ON Owns.item_id = item.item_id
+        WHERE Owns.user_id = ? AND Owns.item_id = ?;
+    `;
+
+    db.query(query, [userId, itemId], (err, results) => {
+        if (err) {
+            console.error("Error fetching item:", err);
+            return res.status(500).json({ error: "Failed to fetch item" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: "Item not found" });
+        }
+
+        res.json(results[0]);
+    });
+});
+
+// route to get categories
+app.get("/categories", (req, res) => {
+    const query = `SELECT * FROM category`;
+
+    db.query(query, (err, results) => {
+        if (err) {
+            console.error("Error fetching categories:", err);
+            return res
+                .status(500)
+                .json({ error: "Failed to fetch categories" });
+        }
+
+        res.status(200).json(results);
+    });
+});
+
+// route to fetch friends of a user
+app.get("/friends/:userId", (req, res) => {
+    const userId = req.params.userId;
+    const query = `
+        SELECT DISTINCT u.user_id, u.email
+        FROM Friend f
+        JOIN Users u ON (u.user_id = f.friend_user_id OR u.user_id = f.user_id)
+        WHERE (
+            (f.user_id = ? AND f.friend_user_id <> ?)
+            OR (f.friend_user_id = ? AND f.user_id <> ?)
+        ) 
+        AND u.user_id <> ?;  -- Exclude the user themselves
+    `;
+
+    db.query(
+        query,
+        [userId, userId, userId, userId, userId],
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching friends:", err);
+                return res
+                    .status(500)
+                    .json({ error: "Failed to fetch friends " });
+            }
+
+            res.status(200).json(results);
+        }
+    );
 });
 
 // start the server
