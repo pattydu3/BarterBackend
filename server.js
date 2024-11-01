@@ -19,9 +19,9 @@ app.use(bodyParser.json());
 
 // create connection to MySQL database
 const db = mysql.createConnection({
-    host: "192.168.254.11",
-    user: "username",
-    password: "password",
+    host: "192.168.0.105",
+    user: "root",
+    password: "1234",
     database: "BarterDB",
 });
 
@@ -346,39 +346,227 @@ app.get("/fullPost/:limit", (req, res) => {
     });
 });
 
-// route to add a post
-app.post("/post", (req, res) => {
+// Route to add a post and a partnership to the site
+app.post("/postpartnership", (req, res) => {
+    // console.log("START OF THE APP:POST");
+    // console.log(req.body);
     const {
-        postingPartnershipId,
+        user1_id,
         requestingItemId,
         requestingAmount,
         offeringItemId,
         offeringAmount,
         isNegotiable,
+        hashcode,
     } = req.body;
+
+    if (!user1_id || !requestingItemId || !offeringItemId) {
+        return res.status(400).json({ error: "Required fields are missing" });
+    }
+
+    // console.log(`
+    //     server::post-partnership::DebugStart
+    //     user1_id: ${user1_id}
+    //     requestingItemId: ${requestingItemId}
+    //     requestingAmount: ${requestingAmount}
+    //     offeringItemId: ${offeringItemId}
+    //     offeringAmount: ${offeringAmount}
+    //     isNegotiable: ${isNegotiable}
+    //     hashCode: ${hashcode}
+    //     server::post-partnership::DebugEnd
+    //     `);
+
+    // Step 1: Find user2_id from the Owns table
+    const findUserQuery = `SELECT user_id FROM Owns WHERE item_id = ?`;
+
+    db.query(findUserQuery, [requestingItemId], (err, results) => {
+        if (err) {
+            console.error("Error fetching user ID from Owns table:", err);
+            return res.status(500).json({ error: "Failed to find user ID" });
+        }
+
+        if (results.length === 0) {
+            return res
+                .status(404)
+                .json({ error: "No user found for the requested item" });
+        }
+
+        const user2_id = results[0].user_id; // Retrieve the user2_id
+
+        // console.log(`
+        //     server::post-partnership::DebugStart2
+        //     user2_id: ${user2_id}
+        //     server::post-partnership::DebugEnd2
+        //     `);
+
+        db.beginTransaction((err) => {
+            if (err) {
+                console.error("Error starting transaction:", err);
+                return res
+                    .status(500)
+                    .json({ error: "Transaction start failed." });
+            }
+
+            // Step 2: Create partnership
+            const createPartnershipQuery = `
+                INSERT INTO Partnership (user1_id, user2_id, user1_accepted, user1_leadinghash)
+                VALUES (?, ?, ?, ?)`;
+
+            const leadingHash = hashcode.slice(0, 8); // First 8 characters go to the user who made the post
+            const user1Accepted = 1; // user 1 accepts the trade, as they initiate it
+
+            // console.log(`
+            //     server::post-partnership::DebugStart3
+            //     leadingHash: ${leadingHash}
+            //     user1Accepted: ${user1Accepted}
+            //     server::post-partnership::DebugEnd3
+            // `);
+
+            db.query(
+                createPartnershipQuery,
+                [user1_id, user2_id, user1Accepted, leadingHash],
+                (err, partnershipResult) => {
+                    if (err) {
+                        console.error("Error creating partnership:", err);
+                        return db.rollback(() => {
+                            res.status(500).json({
+                                error: "Failed to create partnership",
+                            });
+                        });
+                    }
+
+                    const partnershipId = partnershipResult.insertId;
+
+                    // console.log(`
+                    //     server::post-partnership::DebugStart4
+                    //     partershipId: ${partnershipId}
+                    //     server::post-partnership::DebugEnd4
+                    // `);
+
+                    // Step 3: Insert the post into the Post table
+                    const addPostQuery = `
+                        INSERT INTO Post (posting_partnership_id, requesting_item_id, requesting_amount, offering_item_id, offering_amount, isNegotiable, hash_code)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)`;
+
+                    db.query(
+                        addPostQuery,
+                        [
+                            partnershipId,
+                            requestingItemId,
+                            requestingAmount,
+                            offeringItemId,
+                            offeringAmount,
+                            isNegotiable,
+                            hashcode,
+                        ],
+                        (err, postResult) => {
+                            if (err) {
+                                console.error("Error adding post:", err);
+                                return db.rollback(() => {
+                                    res.status(500).json({
+                                        error: "Failed to add post",
+                                    });
+                                });
+                            }
+
+                            const postId = postResult.insertId;
+
+                            // console.log(`
+                            //     server::post-partnership::DebugStart5
+                            //     partnershipId: ${partnershipId}
+                            //     requestingItemId: ${requestingItemId}
+                            //     requestingAmount: ${requestingAmount}
+                            //     offeringItemId: ${offeringItemId}
+                            //     offeringAmount: ${offeringAmount}
+                            //     isNegotiable: ${isNegotiable}
+                            //     hashCode: ${hashcode}
+                            //     postId: ${postId}
+                            //     server::post-partnership::DebugEnd5
+                            // `);
+                            db.commit((err) => {
+                                if (err) {
+                                    console.error(
+                                        "Error committing transaction:",
+                                        err
+                                    );
+                                    return db.rollback(() => {
+                                        res.status(500).json({
+                                            error: "Transaction commit failed",
+                                        });
+                                    });
+                                }
+
+                                // console.log(`
+                                //     server::post-partnership::DebugStart6
+                                //     partnership_id: ${partnershipId}
+                                //     post_id: ${postId}
+                                //     server::post-partnership::DebugEnd6
+                                //     `);
+
+                                res.json({
+                                    message:
+                                        "Partnership created and post added successfully",
+                                    partnership_id: partnershipId,
+                                    post_id: postId,
+                                });
+                            });
+                        }
+                    );
+                }
+            );
+        });
+    });
+});
+
+// Route to get all post/partnership info made by the user
+app.get("/user-posts/:userId", (req, res) => {
+    const userId = req.params.userId;
+
     const query = `
-        INSERT INTO Post (posting_partnership_id, requesting_item_id, requesting_amount, offering_item_id, offering_amount, isNegotiable) 
-        VALUES (?, ?, ?, ?, ?, ?)
+        SELECT partnership_id, user2_accepted, requesting_item_id, requesting_amount, offering_item_id, offering_amount
+        FROM Partnership
+        JOIN Post ON Partnership.partnership_id = Post.posting_partnership_id
+        WHERE user1_id = ?`;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching user posts:", err);
+            return res
+                .status(500)
+                .json({ error: "Failed to fetch user posts" });
+        }
+
+        res.json(results);
+    });
+});
+
+// Route to get posts requesting items the user has for sale
+app.get("/requested-posts/:userId", (req, res) => {
+    const userId = req.params.userId;
+
+    const query = `
+    SELECT post_id, partnership_id, user2_accepted, 
+        requesting_item_id, requesting_amount, offering_item_id, 
+        offering_amount, 
+        req_item.name AS requesting_item_name, 
+        off_item.name AS offering_item_name
+    FROM Partnership
+    JOIN Post ON Partnership.partnership_id = Post.posting_partnership_id
+    JOIN Item AS req_item ON Post.requesting_item_id = req_item.item_id
+    JOIN Item AS off_item ON Post.offering_item_id = off_item.item_id
+    WHERE user2_id = ? AND user2_accepted = 0
     `;
 
-    db.query(
-        query,
-        [
-            postingPartnershipId,
-            requestingItemId,
-            requestingAmount,
-            offeringItemId,
-            offeringAmount,
-            isNegotiable,
-        ],
-        (err, result) => {
-            if (err) {
-                console.error(err);
-                return res.status(500).send("Error adding the post");
-            }
-            res.status(201).send("Post added successfully");
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching requested posts:", err);
+            return res
+                .status(500)
+                .json({ error: "Failed to fetch requested posts" });
         }
-    );
+
+        res.json(results);
+    });
 });
 
 // route to delete a post based on the id
@@ -484,6 +672,245 @@ app.get("/friends/:userId", (req, res) => {
             res.status(200).json(results);
         }
     );
+});
+
+// route to get all items on the site not owned by the user
+app.get("/item/otherItems/:userId", (req, res) => {
+    const userId = req.params.userId;
+    const query = `
+    SELECT item.*
+    FROM Item
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM Owns
+        WHERE Owns.item_id = item.item_id
+        AND owns.user_id = ?
+    );
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching other items:", err);
+            return res
+                .status(500)
+                .json({ error: "Failed to fetch other items" });
+        }
+
+        res.status(200).json(results);
+    });
+});
+
+// route to accept a trade
+app.post("/acceptTrade/:postId", async (req, res) => {
+    const { postId } = req.params;
+
+    // Start a transaction
+    db.beginTransaction(async (err) => {
+        if (err) {
+            console.error("Error starting transaction:", err);
+            return res
+                .status(500)
+                .json({ message: "Transaction start failed" });
+        }
+
+        // Fetch the post data
+        // const gettransactiondataquery = `select * from post where post_id = ?`;
+        const gettransactiondataquery = `
+            SELECT Post.*, Partnership.user1_id, Partnership.user2_id FROM
+            Post JOIN Partnership
+            ON Post.posting_partnership_id = Partnership.partnership_id
+            WHERE post_id = ?`;
+
+        db.query(getTransactionDataQuery, [postId], (err, postResult) => {
+            if (err) {
+                console.error("Error fetching post data:", err);
+                return db.rollback(() =>
+                    res
+                        .status(500)
+                        .json({ message: "Error fetching post data" })
+                );
+            }
+
+            const post = postResult[0];
+            if (!post) {
+                return db.rollback(() =>
+                    res.status(404).json({ message: "Post not found" })
+                );
+            }
+
+            // Insert data into the transaction table
+            const insertDataIntoTransaction = `INSERT INTO Transaction (user1_id, user1_itemName, user1_itemSold, user2_id, user2_itemName, user2_itemSold) VALUES (?, ?, ?, ?, ?, ?)`;
+            db.query(
+                insertDataIntoTransaction,
+                [
+                    post.user1_id,
+                    post.user1_itemName,
+                    post.requesting_amount,
+                    post.user2_id,
+                    post.user2_itemName,
+                    post.offering_amount,
+                ],
+                (err) => {
+                    if (err) {
+                        console.error("Error inserting transaction:", err);
+                        return db.rollback(() =>
+                            res.status(500).json({
+                                message: "Error inserting transaction",
+                            })
+                        );
+                    }
+
+                    // Delete related entries in the Owns table first
+                    const deleteOwnsQuery = `DELETE FROM Owns WHERE item_id = ? OR item_id = ?`;
+                    db.query(
+                        deleteOwnsQuery,
+                        [post.requesting_item_id, post.offering_item_id],
+                        (err) => {
+                            if (err) {
+                                console.error("Error deleting owns:", err);
+                                return db.rollback(() =>
+                                    res.status(500).json({
+                                        message: "Error deleting owns",
+                                    })
+                                );
+                            }
+
+                            // Delete the posts next
+                            const deletePostsQuery = `DELETE FROM Post WHERE requesting_item_id = ? OR offering_item_id = ?`;
+                            db.query(
+                                deletePostsQuery,
+                                [
+                                    post.requesting_item_id,
+                                    post.offering_item_id,
+                                ],
+                                (err) => {
+                                    if (err) {
+                                        console.error(
+                                            "Error deleting posts:",
+                                            err
+                                        );
+                                        return db.rollback(() =>
+                                            res.status(500).json({
+                                                message: "Error deleting posts",
+                                            })
+                                        );
+                                    }
+
+                                    // Now delete related partnerships
+                                    const deletePartnershipsQuery = `
+                                DELETE FROM Partnership 
+                                WHERE partnership_id IN (
+                                    SELECT DISTINCT posting_partnership_id FROM Post 
+                                    WHERE requesting_item_id = ? OR offering_item_id = ?
+                                )
+                            `;
+                                    db.query(
+                                        deletePartnershipsQuery,
+                                        [
+                                            post.requesting_item_id,
+                                            post.offering_item_id,
+                                        ],
+                                        (err) => {
+                                            if (err) {
+                                                console.error(
+                                                    "Error deleting partnerships:",
+                                                    err
+                                                );
+                                                return db.rollback(() =>
+                                                    res.status(500).json({
+                                                        message:
+                                                            "Error deleting partnerships",
+                                                    })
+                                                );
+                                            }
+
+                                            // Now delete the items
+                                            const deleteRequestingItemQuery = `DELETE FROM Item WHERE item_id = ?`;
+                                            const deleteOfferingItemQuery = `DELETE FROM Item WHERE item_id = ?`;
+                                            Promise.all([
+                                                new Promise(
+                                                    (resolve, reject) => {
+                                                        db.query(
+                                                            deleteRequestingItemQuery,
+                                                            [
+                                                                post.requesting_item_id,
+                                                            ],
+                                                            (err) => {
+                                                                if (err)
+                                                                    return reject(
+                                                                        err
+                                                                    );
+                                                                resolve();
+                                                            }
+                                                        );
+                                                    }
+                                                ),
+                                                new Promise(
+                                                    (resolve, reject) => {
+                                                        db.query(
+                                                            deleteOfferingItemQuery,
+                                                            [
+                                                                post.offering_item_id,
+                                                            ],
+                                                            (err) => {
+                                                                if (err)
+                                                                    return reject(
+                                                                        err
+                                                                    );
+                                                                resolve();
+                                                            }
+                                                        );
+                                                    }
+                                                ),
+                                            ])
+                                                .then(() => {
+                                                    // Commit the transaction
+                                                    db.commit((err) => {
+                                                        if (err) {
+                                                            console.error(
+                                                                "Error committing transaction:",
+                                                                err
+                                                            );
+                                                            return db.rollback(
+                                                                () =>
+                                                                    res
+                                                                        .status(
+                                                                            500
+                                                                        )
+                                                                        .json({
+                                                                            message:
+                                                                                "Transaction commit failed",
+                                                                        })
+                                                            );
+                                                        }
+                                                        res.json({
+                                                            message:
+                                                                "Trade accepted",
+                                                        });
+                                                    });
+                                                })
+                                                .catch((err) => {
+                                                    console.error(
+                                                        "Error during item delete operations:",
+                                                        err
+                                                    );
+                                                    return db.rollback(() =>
+                                                        res.status(500).json({
+                                                            message:
+                                                                "Error during item delete operations",
+                                                        })
+                                                    );
+                                                });
+                                        }
+                                    );
+                                }
+                            );
+                        }
+                    );
+                }
+            );
+        });
+    });
 });
 
 // start the server
