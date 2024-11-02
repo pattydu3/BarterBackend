@@ -19,9 +19,9 @@ app.use(bodyParser.json());
 
 // create connection to MySQL database
 const db = mysql.createConnection({
-    host: "192.168.0.105",
-    user: "root",
-    password: "1234",
+    host: "",
+    user: "user",
+    password: "",
     database: "BarterDB",
 });
 
@@ -364,18 +364,6 @@ app.post("/postpartnership", (req, res) => {
         return res.status(400).json({ error: "Required fields are missing" });
     }
 
-    // console.log(`
-    //     server::post-partnership::DebugStart
-    //     user1_id: ${user1_id}
-    //     requestingItemId: ${requestingItemId}
-    //     requestingAmount: ${requestingAmount}
-    //     offeringItemId: ${offeringItemId}
-    //     offeringAmount: ${offeringAmount}
-    //     isNegotiable: ${isNegotiable}
-    //     hashCode: ${hashcode}
-    //     server::post-partnership::DebugEnd
-    //     `);
-
     // Step 1: Find user2_id from the Owns table
     const findUserQuery = `SELECT user_id FROM Owns WHERE item_id = ?`;
 
@@ -393,12 +381,6 @@ app.post("/postpartnership", (req, res) => {
 
         const user2_id = results[0].user_id; // Retrieve the user2_id
 
-        // console.log(`
-        //     server::post-partnership::DebugStart2
-        //     user2_id: ${user2_id}
-        //     server::post-partnership::DebugEnd2
-        //     `);
-
         db.beginTransaction((err) => {
             if (err) {
                 console.error("Error starting transaction:", err);
@@ -415,13 +397,6 @@ app.post("/postpartnership", (req, res) => {
             const leadingHash = hashcode.slice(0, 8); // First 8 characters go to the user who made the post
             const user1Accepted = 1; // user 1 accepts the trade, as they initiate it
 
-            // console.log(`
-            //     server::post-partnership::DebugStart3
-            //     leadingHash: ${leadingHash}
-            //     user1Accepted: ${user1Accepted}
-            //     server::post-partnership::DebugEnd3
-            // `);
-
             db.query(
                 createPartnershipQuery,
                 [user1_id, user2_id, user1Accepted, leadingHash],
@@ -436,12 +411,6 @@ app.post("/postpartnership", (req, res) => {
                     }
 
                     const partnershipId = partnershipResult.insertId;
-
-                    // console.log(`
-                    //     server::post-partnership::DebugStart4
-                    //     partershipId: ${partnershipId}
-                    //     server::post-partnership::DebugEnd4
-                    // `);
 
                     // Step 3: Insert the post into the Post table
                     const addPostQuery = `
@@ -471,18 +440,6 @@ app.post("/postpartnership", (req, res) => {
 
                             const postId = postResult.insertId;
 
-                            // console.log(`
-                            //     server::post-partnership::DebugStart5
-                            //     partnershipId: ${partnershipId}
-                            //     requestingItemId: ${requestingItemId}
-                            //     requestingAmount: ${requestingAmount}
-                            //     offeringItemId: ${offeringItemId}
-                            //     offeringAmount: ${offeringAmount}
-                            //     isNegotiable: ${isNegotiable}
-                            //     hashCode: ${hashcode}
-                            //     postId: ${postId}
-                            //     server::post-partnership::DebugEnd5
-                            // `);
                             db.commit((err) => {
                                 if (err) {
                                     console.error(
@@ -495,13 +452,6 @@ app.post("/postpartnership", (req, res) => {
                                         });
                                     });
                                 }
-
-                                // console.log(`
-                                //     server::post-partnership::DebugStart6
-                                //     partnership_id: ${partnershipId}
-                                //     post_id: ${postId}
-                                //     server::post-partnership::DebugEnd6
-                                //     `);
 
                                 res.json({
                                     message:
@@ -523,10 +473,17 @@ app.get("/user-posts/:userId", (req, res) => {
     const userId = req.params.userId;
 
     const query = `
-        SELECT partnership_id, user2_accepted, requesting_item_id, requesting_amount, offering_item_id, offering_amount
-        FROM Partnership
-        JOIN Post ON Partnership.partnership_id = Post.posting_partnership_id
-        WHERE user1_id = ?`;
+    SELECT post_id, partnership_id, user2_accepted, 
+        requesting_item_id, requesting_amount, offering_item_id, 
+        offering_amount, 
+        req_item.name AS requesting_item_name, 
+        off_item.name AS offering_item_name
+    FROM Partnership
+    JOIN Post ON Partnership.partnership_id = Post.posting_partnership_id
+    JOIN Item AS req_item ON Post.requesting_item_id = req_item.item_id
+    JOIN Item AS off_item ON Post.offering_item_id = off_item.item_id
+    WHERE user1_id = ? 
+    `;
 
     db.query(query, [userId], (err, results) => {
         if (err) {
@@ -569,18 +526,82 @@ app.get("/requested-posts/:userId", (req, res) => {
     });
 });
 
-// route to delete a post based on the id
+// route to delete a post and its corresponding partnership entry in db
 app.delete("/post/:id", (req, res) => {
     const postId = req.params.id;
-    const query = `DELETE FROM Post WHERE post_id = ?`;
 
-    db.query(query, [postId], (err, result) => {
+    db.beginTransaction((err) => {
         if (err) {
-            console.log(err);
-            return res.status(500).send("Error deleting post");
+            console.error("Error starting transaction:", err);
+            return res
+                .status(500)
+                .json({ message: "Transaction start failed" });
         }
 
-        res.send("Post deleted successfully");
+        const getPartnershipId = `SELECT posting_partnership_id FROM Post WHERE post_id = ?`;
+
+        db.query(getPartnershipId, [postId], (err, partnershipIdResult) => {
+            if (err) {
+                console.error("Error fetching partnership ID:", err);
+                return db.rollback(() => {
+                    res.status(500).json({
+                        message: "Error fetching partnership id",
+                    });
+                });
+            }
+
+            const partnershipId =
+                partnershipIdResult[0]?.posting_partnership_id;
+
+            if (!partnershipId) {
+                return db.rollback(() => {
+                    res.status(404).json({ message: "Post not found" });
+                });
+            }
+
+            // First, delete the post
+            const deletePostQuery = `DELETE FROM Post WHERE post_id = ?`;
+
+            db.query(deletePostQuery, [postId], (err) => {
+                if (err) {
+                    console.error("Error deleting post:", err);
+                    return db.rollback(() => {
+                        res.status(500).json({
+                            message: "Error deleting post",
+                        });
+                    });
+                }
+
+                // Then, delete the partnership
+                const deletePartnershipQuery = `DELETE FROM Partnership WHERE partnership_id = ?`;
+
+                db.query(deletePartnershipQuery, [partnershipId], (err) => {
+                    if (err) {
+                        console.error("Error deleting partnership:", err);
+                        return db.rollback(() => {
+                            res.status(500).json({
+                                message: "Error deleting partnership",
+                            });
+                        });
+                    }
+
+                    db.commit((err) => {
+                        if (err) {
+                            console.error("Error committing transaction:", err);
+                            return db.rollback(() =>
+                                res.status(500).json({
+                                    message: "Transaction commit failed",
+                                })
+                            );
+                        }
+
+                        res.json({
+                            message: "Deleted Trade",
+                        });
+                    });
+                });
+            });
+        });
     });
 });
 
@@ -644,7 +665,7 @@ app.get("/categories", (req, res) => {
     });
 });
 
-// route to fetch friends of a user
+// // route to fetch friends of a user
 app.get("/friends/:userId", (req, res) => {
     const userId = req.params.userId;
     const query = `
@@ -654,7 +675,7 @@ app.get("/friends/:userId", (req, res) => {
         WHERE (
             (f.user_id = ? AND f.friend_user_id <> ?)
             OR (f.friend_user_id = ? AND f.user_id <> ?)
-        ) 
+        )
         AND u.user_id <> ?;  -- Exclude the user themselves
     `;
 
@@ -674,7 +695,7 @@ app.get("/friends/:userId", (req, res) => {
     );
 });
 
-// route to get all items on the site not owned by the user
+//  route to get all items on the site not owned by the user
 app.get("/item/otherItems/:userId", (req, res) => {
     const userId = req.params.userId;
     const query = `
@@ -721,7 +742,7 @@ app.post("/acceptTrade/:postId", async (req, res) => {
             ON Post.posting_partnership_id = Partnership.partnership_id
             WHERE post_id = ?`;
 
-        db.query(getTransactionDataQuery, [postId], (err, postResult) => {
+        db.query(gettransactiondataquery, [postId], (err, postResult) => {
             if (err) {
                 console.error("Error fetching post data:", err);
                 return db.rollback(() =>
@@ -910,6 +931,167 @@ app.post("/acceptTrade/:postId", async (req, res) => {
                 }
             );
         });
+    });
+});
+
+// route to send a friend request
+app.post("/addFriend", async (req, res) => {
+    const { requesterId, recieverEmail } = req.body;
+
+    const getRecieverIdQuery = `SELECT user_id FROM Users WHERE email = ?`;
+    const checkFriendshipQuery = `SELECT * FROM Friend WHERE (user_id = ? AND friend_user_id = ?) OR (user_id = ? AND friend_user_id = ?)`;
+    const addFriendQuery = `INSERT INTO Friend (user_id, friend_user_id) VALUES (?, ?)`;
+
+    db.beginTransaction(async (err) => {
+        if (err) {
+            console.error("Error starting transaction");
+            return res
+                .status(500)
+                .json({ message: "Transaction start failed" });
+        }
+
+        db.query(getRecieverIdQuery, [recieverEmail], (err, recieverResult) => {
+            if (err) {
+                console.error("Error fetching reciever id:", err);
+                return res
+                    .status(500)
+                    .json({ message: "Failed to fetch reciever id" });
+            }
+
+            const recieverId = recieverResult[0]?.user_id;
+
+            if (!recieverId) {
+                return res
+                    .status(404)
+                    .json({ message: "Reciever ID not found" });
+            }
+
+            if (recieverId === requesterId) {
+                return res
+                    .status(200)
+                    .json({ message: "You can't befriend youself" });
+            }
+
+            db.query(
+                checkFriendshipQuery,
+                [requesterId, recieverId, recieverId, requesterId],
+                (err, friendshipResult) => {
+                    if (err) {
+                        console.error("Error checking friendship status", err);
+                        return res.status(500).json({
+                            message: "Failed to check friendship status",
+                        });
+                    }
+
+                    if (friendshipResult.length > 0) {
+                        // Friendship already exists
+                        return res.status(400).json({
+                            message:
+                                "Friend request already exists or you are already friends",
+                        });
+                    }
+
+                    // if friendship does not exist, then send a request
+                    db.query(
+                        addFriendQuery,
+                        [requesterId, recieverId],
+                        (err, addFriendResult) => {
+                            if (err) {
+                                console.error("Error adding friend:", err);
+                                db.rollback(() => {
+                                    res.status(500).json({
+                                        message: "Failed to add friend",
+                                    });
+                                });
+                                return;
+                            }
+
+                            db.commit((err) => {
+                                if (err) {
+                                    console.error(
+                                        "Error committing transaction:",
+                                        err
+                                    );
+                                    db.rollback(() => {
+                                        res.status(500).json({
+                                            message:
+                                                "Transaction commit failed",
+                                        });
+                                    });
+                                    return;
+                                }
+                                res.status(200).json({
+                                    message: "Friend request sent successfully",
+                                });
+                            });
+                        }
+                    );
+                }
+            );
+        });
+    });
+});
+
+// route to update a friend request
+app.put("/updateFriend/:friendId", async (req, res) => {
+    const { friendId } = req.params;
+    const { status } = req.body;
+    const query = `UPDATE Friend SET status = ? WHERE friend_id = ?`;
+
+    db.query(query, [status, friendId], (err) => {
+        if (err) {
+            console.error("Error updating friend status");
+            res.status(500).json({ message: "Error updating friend" });
+        }
+
+        res.status(200).json({ message: "Friend request status updated" });
+    });
+});
+
+// route to get all accepted friends of a user
+app.get("/getFriends/:userId", async (req, res) => {
+    const { userId } = req.params;
+
+    // Query to get all friends for the specified user
+    const getFriendsQuery = `
+        SELECT u.user_id, u.email
+        FROM Users u
+        JOIN Friend f ON (f.user_id = ? AND f.friend_user_id = u.user_id)
+                      OR (f.friend_user_id = ? AND f.user_id = u.user_id)
+        WHERE f.status = 'Accepted'
+    `;
+
+    db.query(getFriendsQuery, [userId, userId], (err, friendsResult) => {
+        if (err) {
+            console.error("Error fetching friends:", err);
+            return res.status(500).json({ message: "Failed to fetch friends" });
+        }
+
+        res.status(200).json(friendsResult);
+    });
+});
+
+// route to get all incoming friend requests for a user
+app.get("/incomingFriendRequests/:userId", async (req, res) => {
+    const { userId } = req.params;
+
+    // Query to get all incoming friend requests for the specified user
+    const getIncomingRequestsQuery = `
+        SELECT f.friend_id, u.user_id, u.email
+        FROM Users u
+        JOIN Friend f ON f.user_id = u.user_id
+        WHERE f.friend_user_id = ? AND f.status = 'Pending'
+    `;
+
+    db.query(getIncomingRequestsQuery, [userId], (err, requestsResult) => {
+        if (err) {
+            console.error("Error fetching incoming friend requests:", err);
+            return res
+                .status(500)
+                .json({ message: "Failed to fetch incoming friend requests" });
+        }
+
+        res.status(200).json(requestsResult);
     });
 });
 
