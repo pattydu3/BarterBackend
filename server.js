@@ -735,12 +735,18 @@ app.post("/acceptTrade/:postId", async (req, res) => {
         }
 
         // Fetch the post data
-        // const gettransactiondataquery = `select * from post where post_id = ?`;
         const gettransactiondataquery = `
-            SELECT Post.*, Partnership.user1_id, Partnership.user2_id FROM
-            Post JOIN Partnership
-            ON Post.posting_partnership_id = Partnership.partnership_id
-            WHERE post_id = ?`;
+        SELECT 
+        Post.*, 
+        Partnership.user1_id, 
+        Partnership.user2_id,
+        ItemRequesting.name AS requesting_item_name,
+        ItemOffering.name AS offering_item_name
+        FROM Post
+        JOIN Partnership ON Post.posting_partnership_id = Partnership.partnership_id
+        JOIN Item AS ItemRequesting ON Post.requesting_item_id = ItemRequesting.item_id
+        JOIN Item AS ItemOffering ON Post.offering_item_id = ItemOffering.item_id
+        WHERE Post.post_id = ?`;
 
         db.query(gettransactiondataquery, [postId], (err, postResult) => {
             if (err) {
@@ -759,16 +765,18 @@ app.post("/acceptTrade/:postId", async (req, res) => {
                 );
             }
 
+            console.log("POST: ", post);
+
             // Insert data into the transaction table
             const insertDataIntoTransaction = `INSERT INTO Transaction (user1_id, user1_itemName, user1_itemSold, user2_id, user2_itemName, user2_itemSold) VALUES (?, ?, ?, ?, ?, ?)`;
             db.query(
                 insertDataIntoTransaction,
                 [
                     post.user1_id,
-                    post.user1_itemName,
+                    post.requesting_item_name,
                     post.requesting_amount,
                     post.user2_id,
-                    post.user2_itemName,
+                    post.offering_item_name,
                     post.offering_amount,
                 ],
                 (err) => {
@@ -797,12 +805,14 @@ app.post("/acceptTrade/:postId", async (req, res) => {
                             }
 
                             // Delete the posts next
-                            const deletePostsQuery = `DELETE FROM Post WHERE requesting_item_id = ? OR offering_item_id = ?`;
+                            const deletePostsQuery = `DELETE FROM Post WHERE (requesting_item_id = ? OR offering_item_id = ?) OR (requesting_item_id = ? OR offering_item_id = ?)`;
                             db.query(
                                 deletePostsQuery,
                                 [
                                     post.requesting_item_id,
                                     post.offering_item_id,
+                                    post.offering_item_id,
+                                    post.requesting_item_id,
                                 ],
                                 (err) => {
                                     if (err) {
@@ -819,8 +829,8 @@ app.post("/acceptTrade/:postId", async (req, res) => {
 
                                     // Now delete related partnerships
                                     const deletePartnershipsQuery = `
-                                DELETE FROM Partnership 
-                                WHERE partnership_id IN (
+                                    DELETE FROM Partnership 
+                                    WHERE partnership_id IN (
                                     SELECT DISTINCT posting_partnership_id FROM Post 
                                     WHERE requesting_item_id = ? OR offering_item_id = ?
                                 )
@@ -1054,7 +1064,7 @@ app.get("/getFriends/:userId", async (req, res) => {
 
     // Query to get all friends for the specified user
     const getFriendsQuery = `
-        SELECT u.user_id, u.email
+        SELECT f.friend_id, u.user_id, u.email
         FROM Users u
         JOIN Friend f ON (f.user_id = ? AND f.friend_user_id = u.user_id)
                       OR (f.friend_user_id = ? AND f.user_id = u.user_id)
@@ -1092,6 +1102,68 @@ app.get("/incomingFriendRequests/:userId", async (req, res) => {
         }
 
         res.status(200).json(requestsResult);
+    });
+});
+
+// route to get all outgoing friend requests for a user
+app.get("/outgoingFriendRequests/:userId", async (req, res) => {
+    const { userId } = req.params;
+
+    const query = `
+    SELECT f.friend_id, u.user_id, u.email 
+    FROM Users u 
+    JOIN Friend f ON f.friend_user_id = u.user_id 
+    WHERE f.user_id = ? AND f.status='Pending'`;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching outgoing friend requests:", err);
+            return res
+                .status(500)
+                .json({ message: "Failed to fetch outgoing friend requests" });
+        }
+
+        res.status(200).json(results);
+    });
+});
+
+// route to delete an entry from the friend table based on friend_id
+app.delete("/deleteFriend/:friendId", async (req, res) => {
+    const { friendId } = req.params;
+
+    const query = `DELETE FROM Friend WHERE friend_id = ?`;
+
+    db.query(query, [friendId], (err) => {
+        if (err) {
+            console.log("Error deleting entry in Friend table:", err);
+            return res
+                .status(500)
+                .json({ message: "Failed to delete entry in friend table" });
+        }
+
+        res.status(200).json({ message: "Deleted Friend" });
+    });
+});
+
+// route to get all transactions made by user
+app.get("/transactions/:userId", async (req, res) => {
+    const { userId } = req.params;
+
+    const query = `
+    SELECT * 
+    FROM Transaction
+    WHERE user1_id = ? OR user2_id = ?
+    `;
+
+    db.query(query, [userId, userId], (err, results) => {
+        if (err) {
+            console.log("Error fetching user transactions:", err);
+            return res
+                .status(500)
+                .json({ message: "Failed to fetch user transactions" });
+        }
+
+        res.status(200).json(results);
     });
 });
 
